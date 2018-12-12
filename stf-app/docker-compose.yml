@@ -1,0 +1,115 @@
+version: '3'
+services:
+  nginx:
+    image: nginx:1.15.7-alpine
+    volumes:
+      - /data/stf/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    network_mode: "host"
+
+  rethinkdb:
+    depends_on:
+      - nginx
+    image: rethinkdb:2.3.6
+    command: rethinkdb --bind all --cache-size 8192 --http-port 8090 --no-update-check
+    volumes:
+      - /data/stf/rethinkdb:/data
+    network_mode: "host"
+
+  stf-migrate:
+    depends_on:
+      - rethinkdb
+    image: $STF_IMAGE
+    command: stf migrate
+    network_mode: "host"
+
+  stf-app:
+    depends_on:
+      - stf-migrate
+    image: $STF_IMAGE
+    command: stf app --port 3100 --auth-url ${STF_URL}/auth/mock/ --websocket-url ws://${STF_HOST}/
+    network_mode: "host"
+    environment:
+      SECRET: $STF_SECRET
+
+  stf-auth:
+    depends_on:
+      - stf-app
+    image: $STF_IMAGE
+    command: stf auth-mock --port 3101 --app-url ${STF_URL}
+    network_mode: "host"
+    environment:
+      SECRET: $STF_SECRET
+
+  stf-storage-plugin-apk:
+    depends_on:
+      - stf-api
+    image: $STF_IMAGE
+    command: stf storage-plugin-apk --port 3102 --storage-url ${STF_URL}
+    network_mode: "host"
+
+  stf-storage-plugin-image:
+    depends_on:
+      - stf-storage-plugin-apk
+    image: $STF_IMAGE
+    command: stf storage-plugin-image --port 3103 --storage-url $STF_URL
+    network_mode: "host"
+
+  stf-storage-temp:
+    depends_on:
+      - stf-storage-plugin-image
+    image: $STF_IMAGE
+    command: stf storage-temp --port 3104 --save-dir /tmp
+    network_mode: "host"
+
+  stf-websocket:
+    depends_on:
+      - stf-auth
+    image: $STF_IMAGE
+    command: stf websocket --port 3105 --storage-url $STF_URL --connect-sub tcp://$STF_HOST:7150 --connect-push tcp://$STF_HOST:7170
+    network_mode: "host"
+    environment:
+      SECRET: $STF_SECRET
+
+  stf-api:
+    depends_on:
+      - stf-websocket
+    image: $STF_IMAGE
+    command: stf api --port 3106 --connect-sub tcp://$STF_HOST:7150 --connect-push tcp://$STF_HOST:7170
+    network_mode: "host"
+    environment:
+      SECRET: $STF_SECRET
+
+  stf-triproxy-app:
+    depends_on:
+      - stf-storage-temp
+    image: $STF_IMAGE
+    command: stf triproxy app --bind-pub "tcp://*:7150" --bind-dealer "tcp://*:7160" --bind-pull "tcp://*:7170"
+    network_mode: "host"
+
+  stf-processor:
+    depends_on:
+      - stf-triproxy-app
+    image: $STF_IMAGE
+    command: stf processor stf-processer --connect-app-dealer tcp://$STF_HOST:7160 --connect-dev-dealer tcp://$STF_HOST:7260
+    network_mode: "host"
+
+  stf-triproxy-dev:
+    depends_on:
+      - stf-processor
+    image: $STF_IMAGE
+    command: stf triproxy dev --bind-pub "tcp://*:7250" --bind-dealer "tcp://*:7260" --bind-pull "tcp://*:7270"
+    network_mode: "host"
+
+  stf-reaper:
+    depends_on:
+      - stf-triproxy-dev
+    image: $STF_IMAGE
+    command: stf reaper dev --connect-push tcp://$STF_HOST:7270 --connect-sub tcp://$STF_HOST:7150 --heartbeat-timeout 30000
+    network_mode: "host"
+
+  stf-log-rethinkdb:
+    depends_on:
+      - stf-reaper
+    image: $STF_IMAGE
+    command: stf log-rethinkdb --connect-sub tcp://devside.$STF_HOST:7150
+    network_mode: "host"

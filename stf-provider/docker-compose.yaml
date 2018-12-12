@@ -1,0 +1,15 @@
+version: '3'
+services:
+  adbd:
+    image: sorccu/adb:latest
+    privileged: true
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    network_mode: "host"
+
+  stf-provider:
+    depends_on:
+      - adbd
+    image: $STF_IMAGE
+    command: stf provider --name "${STF_PROVIDER}" --connect-sub tcp://devside.$STF_HOST:7250 --connect-push tcp://devside.$STF_HOST:7270 --storage-url $SFT_URL --public-ip $STF_PROVIDER.$STF_HOST --min-port=15000 --max-port=25000 --heartbeat-interval 20000 --screen-ws-url-pattern "ws://${STF_HOST}/d/${STF_PROVIDER}/<%= serial %>/<%= publicPort %>/"
+    network_mode: "host"
